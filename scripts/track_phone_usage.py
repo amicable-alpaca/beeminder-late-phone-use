@@ -7,9 +7,9 @@ import pytz
 from pathlib import Path
 
 # Configuration
-BEEMINDER_USERNAME = os.environ.get('BEEMINDER_USERNAME', 'zarathustra')
-BEEMINDER_AUTH_TOKEN = os.environ.get('BEEMINDER_AUTH_TOKEN', 'Koy57AUAxgSxw1QhfHRz')
-BEEMINDER_GOAL_SLUG = os.environ.get('BEEMINDER_GOAL_SLUG', 'usingphonelate')
+BEEMINDER_USERNAME = os.environ.get('BEEMINDER_USERNAME')
+BEEMINDER_AUTH_TOKEN = os.environ.get('BEEMINDER_AUTH_TOKEN')
+BEEMINDER_GOAL_SLUG = os.environ.get('BEEMINDER_GOAL_SLUG')
 DB_FILE = 'data/phone_usage_db.json'
 LAST_RUN_FILE = 'data/last_run.json'
 
