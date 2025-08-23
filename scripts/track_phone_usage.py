@@ -129,12 +129,8 @@ def main(trigger_date=None):
         else:
             beeminder_date = unlock_date.strftime('%Y-%m-%d')
     else:
-        # Manual trigger - use current time logic
-        now = datetime.now()
-        if now.hour < 4:
-            beeminder_date = (now - timedelta(days=1)).strftime('%Y-%m-%d')
-        else:
-            beeminder_date = now.strftime('%Y-%m-%d')
+        # Manual trigger - use current date for testing
+        beeminder_date = datetime.now().strftime('%Y-%m-%d')
     
     print(f"Processing phone usage for Beeminder date: {beeminder_date}")
     
