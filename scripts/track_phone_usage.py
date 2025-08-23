@@ -29,33 +29,25 @@ def save_database(db):
     with open(DB_FILE, 'w') as f:
         json.dump(db, f, indent=2)
 
-def check_already_run_today():
-    """Check if we've already run for this 11PM-4AM window."""
+def check_already_processed_date(target_date):
+    """Check if we've already processed this specific Beeminder target date."""
     if not os.path.exists(LAST_RUN_FILE):
         return False
     
     with open(LAST_RUN_FILE, 'r') as f:
         last_run_data = json.load(f)
     
-    last_run = datetime.fromisoformat(last_run_data['last_run'])
-    now = datetime.now()
-    
-    # Define the current window
-    if now.hour >= 23:
-        window_start = now.replace(hour=23, minute=0, second=0, microsecond=0)
-    elif now.hour < 4:
-        window_start = (now - timedelta(days=1)).replace(hour=23, minute=0, second=0, microsecond=0)
-    else:
-        # Not in the target window, allow run
-        return False
-    
-    # Check if last run was in the same window
-    return last_run >= window_start
+    # Check if we've already processed this exact target date
+    last_processed_date = last_run_data.get('last_processed_date')
+    return last_processed_date == target_date
 
-def update_last_run():
-    """Update the last run timestamp."""
+def update_last_run(processed_date):
+    """Update the last run timestamp and processed date."""
     with open(LAST_RUN_FILE, 'w') as f:
-        json.dump({'last_run': datetime.now().isoformat()}, f)
+        json.dump({
+            'last_run': datetime.now().isoformat(),
+            'last_processed_date': processed_date
+        }, f)
 
 def get_beeminder_datapoints():
     """Fetch all datapoints from Beeminder."""
@@ -122,42 +114,50 @@ def main(trigger_date=None):
     """Main function to handle the phone usage tracking."""
     ensure_directories()
     
-    # Check if we've already run for this window
-    if check_already_run_today():
-        print("Already processed for this 11PM-4AM window. Skipping.")
-        return
-    
     # Load database
     db = load_database()
     
-    # Get current date or use provided date
+    # Determine the Beeminder target date
     if trigger_date:
-        current_date = trigger_date
-    else:
-        now = datetime.now()
-        # If it's after midnight but before 4 AM, use yesterday's date
-        if now.hour < 4:
-            current_date = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+        # MacroDroid sends the calendar date when phone was unlocked
+        unlock_date = datetime.strptime(trigger_date, '%Y-%m-%d')
+        unlock_hour = datetime.now().hour  # Current hour for logic
+        
+        # If unlock was between midnight and 4 AM, it counts for the previous day
+        if unlock_hour < 4:
+            beeminder_date = (unlock_date - timedelta(days=1)).strftime('%Y-%m-%d')
         else:
-            current_date = now.strftime('%Y-%m-%d')
+            beeminder_date = unlock_date.strftime('%Y-%m-%d')
+    else:
+        # Manual trigger - use current time logic
+        now = datetime.now()
+        if now.hour < 4:
+            beeminder_date = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+        else:
+            beeminder_date = now.strftime('%Y-%m-%d')
     
-    print(f"Processing phone usage for date: {current_date}")
+    print(f"Processing phone usage for Beeminder date: {beeminder_date}")
+    
+    # Check if we've already processed this specific Beeminder date
+    if check_already_processed_date(beeminder_date):
+        print(f"Already processed datapoint for {beeminder_date}. Skipping.")
+        return
     
     # Check if we already have a datapoint for this date
     existing_dates = [dp['date'] for dp in db['datapoints']]
-    if current_date in existing_dates:
-        print(f"Datapoint for {current_date} already exists in database.")
+    if beeminder_date in existing_dates:
+        print(f"Datapoint for {beeminder_date} already exists in database.")
     else:
         # Add to source of truth database
         new_datapoint = {
-            'date': current_date,
+            'date': beeminder_date,
             'value': 1,
             'timestamp': datetime.now().isoformat(),
             'comment': 'Late night phone usage detected'
         }
         db['datapoints'].append(new_datapoint)
         save_database(db)
-        print(f"Added datapoint for {current_date} to database.")
+        print(f"Added datapoint for {beeminder_date} to database.")
     
     # Get Beeminder datapoints
     beeminder_datapoints = get_beeminder_datapoints()
@@ -173,18 +173,18 @@ def main(trigger_date=None):
         date = datetime.fromtimestamp(dp['timestamp']).strftime('%Y-%m-%d')
         beeminder_dates.add(date)
     
-    if current_date not in beeminder_dates:
+    if beeminder_date not in beeminder_dates:
         # Add today's datapoint to Beeminder
-        result = add_beeminder_datapoint(current_date)
+        result = add_beeminder_datapoint(beeminder_date)
         if result:
-            print(f"Successfully added datapoint for {current_date} to Beeminder.")
+            print(f"Successfully added datapoint for {beeminder_date} to Beeminder.")
         else:
-            print(f"Failed to add datapoint for {current_date} to Beeminder.")
+            print(f"Failed to add datapoint for {beeminder_date} to Beeminder.")
     else:
-        print(f"Datapoint for {current_date} already exists in Beeminder.")
+        print(f"Datapoint for {beeminder_date} already exists in Beeminder.")
     
-    # Update last run time
-    update_last_run()
+    # Update last run time with the processed date
+    update_last_run(beeminder_date)
     print("Workflow completed successfully.")
 
 if __name__ == "__main__":
