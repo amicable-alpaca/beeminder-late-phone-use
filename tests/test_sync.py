@@ -82,4 +82,3 @@ def test_beeminder_date_cutoff():
 
     assert tpu.calculate_beeminder_date(early) == "2025-08-24"
     assert tpu.calculate_beeminder_date(late) == "2025-08-25"
-

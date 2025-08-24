@@ -20,7 +20,6 @@ TIMEZONE = os.environ.get("TIMEZONE", "America/New_York")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(message)s")
 logger = logging.getLogger(__name__)
 
-
 def calculate_beeminder_date(unlock_datetime):
     """Return the Beeminder date applying the 4 AM cutoff."""
     if unlock_datetime.hour < 4:
@@ -194,6 +193,7 @@ def main(trigger_date=None):
         unlock_dt = now
 
     beeminder_date = calculate_beeminder_date(unlock_dt)
+
     logger.info(f"Processing phone usage for Beeminder date: {beeminder_date}")
 
     existing_dates = [dp['date'] for dp in db['datapoints']]
@@ -242,4 +242,3 @@ if __name__ == "__main__":
     # Accept optional date argument
     trigger_date = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] else None
     main(trigger_date)
-
