@@ -1,10 +1,12 @@
 import json
 import os
 import sys
-import requests
+import logging
 from datetime import datetime, timedelta
-import pytz
 from pathlib import Path
+
+import pytz
+import requests
 
 # Configuration
 BEEMINDER_USERNAME = os.environ.get('BEEMINDER_USERNAME')
@@ -12,6 +14,11 @@ BEEMINDER_AUTH_TOKEN = os.environ.get('BEEMINDER_AUTH_TOKEN')
 BEEMINDER_GOAL_SLUG = os.environ.get('BEEMINDER_GOAL_SLUG')
 DB_FILE = 'data/phone_usage_db.json'
 LAST_RUN_FILE = 'data/last_run.json'
+# Timezone used for midnight-4 AM cutoff logic
+TIMEZONE = os.environ.get("TIMEZONE", "America/New_York")
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(message)s")
+logger = logging.getLogger(__name__)
 
 def ensure_directories():
     """Create necessary directories if they don't exist."""
@@ -29,25 +36,36 @@ def save_database(db):
     with open(DB_FILE, 'w') as f:
         json.dump(db, f, indent=2)
 
-def check_already_processed_date(target_date):
-    """Check if we've already processed this specific Beeminder target date."""
+def check_already_processed_date(target_date, beeminder_map, db):
+    """Check if we've already processed this date and Beeminder has matching data."""
     if not os.path.exists(LAST_RUN_FILE):
         return False
-    
+
     with open(LAST_RUN_FILE, 'r') as f:
         last_run_data = json.load(f)
-    
-    # Check if we've already processed this exact target date
+
     last_processed_date = last_run_data.get('last_processed_date')
-    return last_processed_date == target_date
+    if last_processed_date != target_date:
+        return False
+
+    expected = next((dp for dp in db['datapoints'] if dp['date'] == target_date), None)
+    beeminder_dp = beeminder_map.get(target_date)
+
+    if not expected or not beeminder_dp:
+        return False
+
+    return (
+        beeminder_dp.get('value') == expected.get('value', 1)
+        and beeminder_dp.get('comment', '') == expected.get('comment', '')
+    )
 
 def update_last_run(processed_date):
     """Update the last run timestamp and processed date."""
     with open(LAST_RUN_FILE, 'w') as f:
-        json.dump({
-            'last_run': datetime.now().isoformat(),
-            'last_processed_date': processed_date
-        }, f)
+        json.dump(
+            {"last_run": datetime.now().isoformat(), "last_processed_date": processed_date},
+            f,
+        )
 
 def get_beeminder_datapoints():
     """Fetch all datapoints from Beeminder."""
@@ -59,7 +77,8 @@ def get_beeminder_datapoints():
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching Beeminder data: {e}")
+        status = getattr(e.response, "status_code", "N/A")
+        logger.error(f"Error fetching Beeminder data (status {status}): {e}")
         return []
 
 def add_beeminder_datapoint(date_str, value=1, comment="Late night phone usage detected"):
@@ -83,32 +102,66 @@ def add_beeminder_datapoint(date_str, value=1, comment="Late night phone usage d
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Error adding datapoint to Beeminder: {e}")
+        status = getattr(e.response, "status_code", "N/A")
+        logger.error(f"Error adding datapoint to Beeminder (status {status}): {e}")
         return None
 
-def sync_datapoints(db, beeminder_datapoints):
-    """Sync missing datapoints from DB to Beeminder."""
-    # Create a set of dates that exist in Beeminder
-    beeminder_dates = set()
-    for dp in beeminder_datapoints:
-        # Convert timestamp to date
+def update_beeminder_datapoint(datapoint_id, value, comment):
+    """Update an existing Beeminder datapoint."""
+    url = (
+        f"https://www.beeminder.com/api/v1/users/{BEEMINDER_USERNAME}/goals/"
+        f"{BEEMINDER_GOAL_SLUG}/datapoints/{datapoint_id}.json"
+    )
+    data = {'auth_token': BEEMINDER_AUTH_TOKEN, 'value': value, 'comment': comment}
+    try:
+        response = requests.put(url, json=data)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        status = getattr(e.response, "status_code", "N/A")
+        logger.error(f"Error updating datapoint {datapoint_id} (status {status}): {e}")
+        return None
+
+def get_beeminder_date_map(datapoints):
+    """Return mapping of date -> datapoint dict."""
+    date_map = {}
+    for dp in datapoints:
         date = datetime.fromtimestamp(dp['timestamp']).strftime('%Y-%m-%d')
-        beeminder_dates.add(date)
-    
-    # Find missing datapoints in Beeminder
+        date_map[date] = dp
+    return date_map
+
+def sync_datapoints(db, beeminder_map):
+    """Sync missing or mismatched datapoints from DB to Beeminder."""
     synced_count = 0
+    failed_syncs = []
     for dp in db['datapoints']:
-        if dp['date'] not in beeminder_dates:
-            print(f"Syncing missing datapoint for {dp['date']}")
+        existing = beeminder_map.get(dp['date'])
+        if not existing:
+            logger.info(f"Syncing missing datapoint for {dp['date']}")
             result = add_beeminder_datapoint(
-                dp['date'], 
+                dp['date'],
                 dp.get('value', 1),
-                dp.get('comment', 'Historical late night phone usage (synced)')
+                dp.get('comment', 'Historical late night phone usage (synced)'),
             )
             if result:
                 synced_count += 1
-    
-    return synced_count
+            else:
+                failed_syncs.append(dp['date'])
+        elif existing.get('value') != dp.get('value', 1) or existing.get('comment', '') != dp.get('comment', ''):
+            logger.info(f"Updating mismatched datapoint for {dp['date']}")
+            result = update_beeminder_datapoint(
+                existing['id'],
+                dp.get('value', 1),
+                dp.get('comment', 'Historical late night phone usage (synced)'),
+            )
+            if result:
+                synced_count += 1
+            else:
+                failed_syncs.append(dp['date'])
+
+    if failed_syncs:
+        logger.warning(f"Failed to sync datapoints: {', '.join(failed_syncs)}")
+    return synced_count, failed_syncs
 
 def main(trigger_date=None):
     """Main function to handle the phone usage tracking."""
@@ -116,72 +169,63 @@ def main(trigger_date=None):
     
     # Load database
     db = load_database()
-    
-    # Determine the Beeminder target date
+
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+
     if trigger_date:
-        # MacroDroid sends the calendar date when phone was unlocked
-        unlock_date = datetime.strptime(trigger_date, '%Y-%m-%d')
-        unlock_hour = datetime.now().hour  # Current hour for logic
-        
-        # If unlock was between midnight and 4 AM, it counts for the previous day
+        unlock_date = tz.localize(datetime.strptime(trigger_date, "%Y-%m-%d"))
+        unlock_hour = now.hour
         if unlock_hour < 4:
-            beeminder_date = (unlock_date - timedelta(days=1)).strftime('%Y-%m-%d')
+            beeminder_date = (unlock_date - timedelta(days=1)).strftime("%Y-%m-%d")
         else:
-            beeminder_date = unlock_date.strftime('%Y-%m-%d')
+            beeminder_date = unlock_date.strftime("%Y-%m-%d")
     else:
-        # Manual trigger - use current date for testing
-        beeminder_date = datetime.now().strftime('%Y-%m-%d')
-    
-    print(f"Processing phone usage for Beeminder date: {beeminder_date}")
-    
-    # Check if we've already processed this specific Beeminder date
-    if check_already_processed_date(beeminder_date):
-        print(f"Already processed datapoint for {beeminder_date}. Skipping.")
-        return
-    
-    # Check if we already have a datapoint for this date
+        beeminder_date = now.strftime("%Y-%m-%d")
+
+    logger.info(f"Processing phone usage for Beeminder date: {beeminder_date}")
+
     existing_dates = [dp['date'] for dp in db['datapoints']]
-    if beeminder_date in existing_dates:
-        print(f"Datapoint for {beeminder_date} already exists in database.")
-    else:
-        # Add to source of truth database
+    if beeminder_date not in existing_dates:
         new_datapoint = {
             'date': beeminder_date,
             'value': 1,
-            'timestamp': datetime.now().isoformat(),
-            'comment': 'Late night phone usage detected'
+            'timestamp': now.isoformat(),
+            'comment': 'Late night phone usage detected',
         }
         db['datapoints'].append(new_datapoint)
         save_database(db)
-        print(f"Added datapoint for {beeminder_date} to database.")
-    
-    # Get Beeminder datapoints
-    beeminder_datapoints = get_beeminder_datapoints()
-    
-    # Sync any missing historical datapoints
-    synced = sync_datapoints(db, beeminder_datapoints)
-    if synced > 0:
-        print(f"Synced {synced} historical datapoints to Beeminder.")
-    
-    # Check if today's datapoint exists in Beeminder
-    beeminder_dates = set()
-    for dp in beeminder_datapoints:
-        date = datetime.fromtimestamp(dp['timestamp']).strftime('%Y-%m-%d')
-        beeminder_dates.add(date)
-    
-    if beeminder_date not in beeminder_dates:
-        # Add today's datapoint to Beeminder
-        result = add_beeminder_datapoint(beeminder_date)
-        if result:
-            print(f"Successfully added datapoint for {beeminder_date} to Beeminder.")
-        else:
-            print(f"Failed to add datapoint for {beeminder_date} to Beeminder.")
+        logger.info(f"Added datapoint for {beeminder_date} to database.")
     else:
-        print(f"Datapoint for {beeminder_date} already exists in Beeminder.")
-    
-    # Update last run time with the processed date
+        logger.info(f"Datapoint for {beeminder_date} already exists in database.")
+
+    beeminder_datapoints = get_beeminder_datapoints()
+    beeminder_map = get_beeminder_date_map(beeminder_datapoints)
+
+    synced, failures = sync_datapoints(db, beeminder_map)
+    if synced:
+        logger.info(f"Synced {synced} historical datapoint(s) to Beeminder.")
+    if failures:
+        logger.warning(f"Some datapoints failed to sync: {', '.join(failures)}")
+
+    beeminder_datapoints = get_beeminder_datapoints()
+    beeminder_map = get_beeminder_date_map(beeminder_datapoints)
+
+    if check_already_processed_date(beeminder_date, beeminder_map, db):
+        logger.info(f"Already processed datapoint for {beeminder_date}. Skipping.")
+    else:
+        if beeminder_date not in beeminder_map:
+            result = add_beeminder_datapoint(beeminder_date)
+            if result:
+                logger.info(f"Successfully added datapoint for {beeminder_date} to Beeminder.")
+            else:
+                logger.error(f"Failed to add datapoint for {beeminder_date} to Beeminder.")
+                return
+        else:
+            logger.info(f"Datapoint for {beeminder_date} already exists in Beeminder.")
+
     update_last_run(beeminder_date)
-    print("Workflow completed successfully.")
+    logger.info("Workflow completed successfully.")
 
 if __name__ == "__main__":
     # Accept optional date argument
