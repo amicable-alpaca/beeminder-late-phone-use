@@ -194,6 +194,7 @@ def main(trigger_date=None):
         unlock_dt = now
 
     beeminder_date = calculate_beeminder_date(unlock_dt)
+
     logger.info(f"Processing phone usage for Beeminder date: {beeminder_date}")
 
     existing_dates = [dp['date'] for dp in db['datapoints']]
