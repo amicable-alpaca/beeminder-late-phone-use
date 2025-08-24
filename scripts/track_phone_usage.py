@@ -20,6 +20,12 @@ TIMEZONE = os.environ.get("TIMEZONE", "America/New_York")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(message)s")
 logger = logging.getLogger(__name__)
 
+def calculate_beeminder_date(unlock_datetime):
+    """Return the Beeminder date applying the 4 AM cutoff."""
+    if unlock_datetime.hour < 4:
+        unlock_datetime -= timedelta(days=1)
+    return unlock_datetime.strftime("%Y-%m-%d")
+
 def ensure_directories():
     """Create necessary directories if they don't exist."""
     Path('data').mkdir(exist_ok=True)
@@ -174,14 +180,19 @@ def main(trigger_date=None):
     now = datetime.now(tz)
 
     if trigger_date:
-        unlock_date = tz.localize(datetime.strptime(trigger_date, "%Y-%m-%d"))
-        unlock_hour = now.hour
-        if unlock_hour < 4:
-            beeminder_date = (unlock_date - timedelta(days=1)).strftime("%Y-%m-%d")
-        else:
-            beeminder_date = unlock_date.strftime("%Y-%m-%d")
+        date_part = datetime.strptime(trigger_date, "%Y-%m-%d")
+        unlock_dt = tz.localize(
+            date_part.replace(
+                hour=now.hour,
+                minute=now.minute,
+                second=now.second,
+                microsecond=now.microsecond,
+            )
+        )
     else:
-        beeminder_date = now.strftime("%Y-%m-%d")
+        unlock_dt = now
+
+    beeminder_date = calculate_beeminder_date(unlock_dt)
 
     logger.info(f"Processing phone usage for Beeminder date: {beeminder_date}")
 
@@ -190,7 +201,7 @@ def main(trigger_date=None):
         new_datapoint = {
             'date': beeminder_date,
             'value': 1,
-            'timestamp': now.isoformat(),
+            'timestamp': unlock_dt.isoformat(),
             'comment': 'Late night phone usage detected',
         }
         db['datapoints'].append(new_datapoint)
