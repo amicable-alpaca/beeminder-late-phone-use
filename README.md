@@ -10,6 +10,7 @@ This repository contains the automation system for tracking late-night phone usa
    - `BEEMINDER_USERNAME`: Your Beeminder username
    - `BEEMINDER_AUTH_TOKEN`: Your Beeminder auth token
    - `BEEMINDER_GOAL_SLUG`: Your Beeminder goal slug
+   - `TIMEZONE` *(optional)*: IANA timezone name (defaults to `America/New_York`)
 
 ### 2. MacroDroid Configuration
 Configure MacroDroid on your Android device to trigger the GitHub Action when you unlock your phone between 11 PM and 4 AM.
@@ -32,7 +33,7 @@ Configure MacroDroid on your Android device to trigger the GitHub Action when yo
 1. **MacroDroid Detection**: Detects phone unlocks between 11 PM - 4 AM
 2. **GitHub Action Trigger**: MacroDroid sends a webhook to trigger the GitHub Action
 3. **Database Management**: Creates/maintains a source of truth database in the repository
-4. **Beeminder Sync**: Syncs all datapoints with Beeminder, ensuring consistency
+4. **Beeminder Sync**: Syncs all datapoints with Beeminder, ensuring consistency and posting timestamps in the configured timezone
 5. **Duplicate Prevention**: Ensures only one datapoint per night is recorded
 
 ## Manual Testing

@@ -88,11 +88,15 @@ def get_beeminder_datapoints():
         return []
 
 def add_beeminder_datapoint(date_str, value=1, comment="Late night phone usage detected"):
-    """Add a datapoint to Beeminder."""
-    url = f"https://www.beeminder.com/api/v1/users/{BEEMINDER_USERNAME}/goals/{BEEMINDER_GOAL_SLUG}/datapoints.json"
-    
-    # Convert date string to timestamp
-    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+    """Add a datapoint to Beeminder using the user's local timezone."""
+    url = (
+        f"https://www.beeminder.com/api/v1/users/{BEEMINDER_USERNAME}/goals/"
+        f"{BEEMINDER_GOAL_SLUG}/datapoints.json"
+    )
+
+    # Convert date string to a midnight timestamp in the configured timezone
+    local_tz = pytz.timezone(TIMEZONE)
+    date_obj = local_tz.localize(datetime.strptime(date_str, "%Y-%m-%d"))
     timestamp = int(date_obj.timestamp())
     
     data = {
@@ -129,10 +133,11 @@ def update_beeminder_datapoint(datapoint_id, value, comment):
         return None
 
 def get_beeminder_date_map(datapoints):
-    """Return mapping of date -> datapoint dict."""
+    """Return mapping of date -> datapoint dict using the configured timezone."""
     date_map = {}
+    local_tz = pytz.timezone(TIMEZONE)
     for dp in datapoints:
-        date = datetime.fromtimestamp(dp['timestamp']).strftime('%Y-%m-%d')
+        date = datetime.fromtimestamp(dp["timestamp"], local_tz).strftime("%Y-%m-%d")
         date_map[date] = dp
     return date_map
 

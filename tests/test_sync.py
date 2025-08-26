@@ -82,3 +82,28 @@ def test_beeminder_date_cutoff():
 
     assert tpu.calculate_beeminder_date(early) == "2025-08-24"
     assert tpu.calculate_beeminder_date(late) == "2025-08-25"
+
+
+def test_add_beeminder_datapoint_uses_timezone(monkeypatch):
+    """Ensure timestamps are generated in the configured timezone."""
+    tpu.TIMEZONE = "America/Los_Angeles"
+    payload = {}
+
+    class DummyResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": "1"}
+
+    def fake_post(url, json):
+        payload.update(json)
+        return DummyResponse()
+
+    monkeypatch.setattr(tpu.requests, "post", fake_post)
+
+    tpu.add_beeminder_datapoint("2025-08-24")
+
+    tz = pytz.timezone("America/Los_Angeles")
+    expected = int(tz.localize(datetime(2025, 8, 24)).timestamp())
+    assert payload["timestamp"] == expected
