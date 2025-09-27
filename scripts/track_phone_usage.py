@@ -132,6 +132,49 @@ def update_beeminder_datapoint(datapoint_id, value, comment):
         logger.error(f"Error updating datapoint {datapoint_id} (status {status}): {e}")
         return None
 
+def delete_beeminder_datapoint(datapoint_id):
+    """Delete a datapoint from Beeminder."""
+    url = (
+        f"https://www.beeminder.com/api/v1/users/{BEEMINDER_USERNAME}/goals/"
+        f"{BEEMINDER_GOAL_SLUG}/datapoints/{datapoint_id}.json"
+    )
+    params = {'auth_token': BEEMINDER_AUTH_TOKEN}
+    try:
+        response = requests.delete(url, params=params)
+        response.raise_for_status()
+        return True
+    except requests.exceptions.RequestException as e:
+        status = getattr(e.response, "status_code", "N/A")
+        logger.error(f"Error deleting datapoint {datapoint_id} (status {status}): {e}")
+        return False
+
+def validate_and_clean_beeminder_data(db, beeminder_map):
+    """Check for unauthorized datapoints in Beeminder and remove them."""
+    authorized_dates = {dp['date'] for dp in db['datapoints']}
+    unauthorized_datapoints = []
+    deleted_count = 0
+    failed_deletions = []
+
+    for date, beeminder_dp in beeminder_map.items():
+        if date not in authorized_dates:
+            unauthorized_datapoints.append((date, beeminder_dp['id']))
+
+    if unauthorized_datapoints:
+        logger.info(f"Found {len(unauthorized_datapoints)} unauthorized datapoint(s) in Beeminder")
+        for date, dp_id in unauthorized_datapoints:
+            logger.info(f"Deleting unauthorized datapoint for {date} (ID: {dp_id})")
+            if delete_beeminder_datapoint(dp_id):
+                deleted_count += 1
+            else:
+                failed_deletions.append(date)
+
+    if deleted_count:
+        logger.info(f"Successfully deleted {deleted_count} unauthorized datapoint(s)")
+    if failed_deletions:
+        logger.warning(f"Failed to delete unauthorized datapoints: {', '.join(failed_deletions)}")
+
+    return deleted_count, failed_deletions
+
 def get_beeminder_date_map(datapoints):
     """Return mapping of date -> datapoint dict using the configured timezone."""
     date_map = {}
@@ -217,6 +260,18 @@ def main(trigger_date=None):
 
     beeminder_datapoints = get_beeminder_datapoints()
     beeminder_map = get_beeminder_date_map(beeminder_datapoints)
+
+    # Validate and clean unauthorized datapoints before syncing
+    deleted, delete_failures = validate_and_clean_beeminder_data(db, beeminder_map)
+    if deleted:
+        logger.info(f"Cleaned {deleted} unauthorized datapoint(s) from Beeminder.")
+    if delete_failures:
+        logger.warning(f"Failed to delete some unauthorized datapoints: {', '.join(delete_failures)}")
+
+    # Refresh Beeminder data after cleanup
+    if deleted:
+        beeminder_datapoints = get_beeminder_datapoints()
+        beeminder_map = get_beeminder_date_map(beeminder_datapoints)
 
     synced, failures = sync_datapoints(db, beeminder_map)
     if synced:
