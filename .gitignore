@@ -8,6 +8,11 @@ env/
 venv/
 .env
 
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
 # IDE
 .vscode/
 .idea/
