@@ -155,6 +155,12 @@
       "value": 1,
       "timestamp": "2025-10-08T23:19:50.994328-04:00",
       "comment": "Late night phone usage detected"
+    },
+    {
+      "date": "2025-10-09",
+      "value": 1,
+      "timestamp": "2025-10-09T23:10:09.629287-04:00",
+      "comment": "Late night phone usage detected"
     }
   ],
   "metadata": {
